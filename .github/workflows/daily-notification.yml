@@ -3,7 +3,7 @@ name: Daily Calendar Notification
 on:
   schedule:
     # 毎日朝8:00 JST (23:00 UTC) に実行
-    - cron: '0 23 * * *'
+    - cron: '30 23 * * *'
     # 毎日夜9:00 JST (12:00 UTC) に実行
     - cron: '0 12 * * *'
   workflow_dispatch:  # 手動実行も可能
