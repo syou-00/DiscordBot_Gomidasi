@@ -1,5 +1,6 @@
 import datetime
 import os.path
+import pytz
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -34,19 +35,29 @@ def get_tomorrow_events():
   try:
     service = build("calendar", "v3", credentials=creds)
 
-    # 翌日の開始と終了時刻を設定
-    tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
-    tomorrow_start = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow_end = tomorrow.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # 日本時間基準で翌日の開始と終了時刻を設定
+    jst = pytz.timezone('Asia/Tokyo')
+    now_jst = datetime.datetime.now(jst)
+    tomorrow_jst = now_jst + datetime.timedelta(days=1)
+    
+    # 翌日の0時から23時59分まで（日本時間）
+    tomorrow_start_jst = tomorrow_jst.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_end_jst = tomorrow_jst.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    # UTCに変換
+    tomorrow_start_utc = tomorrow_start_jst.astimezone(pytz.UTC)
+    tomorrow_end_utc = tomorrow_end_jst.astimezone(pytz.UTC)
+    
+    print(f"翌日の予定を取得中... ({tomorrow_start_jst.strftime('%Y-%m-%d')} JST)")
+    print(f"検索範囲: {tomorrow_start_utc.isoformat()} から {tomorrow_end_utc.isoformat()}")
     
     # カレンダーAPIを呼び出します。
-    print("翌日の予定を取得中...")
     events_result = (
       service.events()
       .list(
         calendarId="primary",
-        timeMin=tomorrow_start.isoformat() + "Z",
-        timeMax=tomorrow_end.isoformat() + "Z",
+        timeMin=tomorrow_start_utc.isoformat(),
+        timeMax=tomorrow_end_utc.isoformat(),
         singleEvents=True,
         orderBy="startTime",
       )
@@ -58,17 +69,36 @@ def get_tomorrow_events():
       print("翌日の予定はありません。")
       return []
 
-    # 翌日の予定を返す
+    # 翌日の予定のみを厳密にフィルタリング
     tomorrow_events = []
+    tomorrow_date_jst = tomorrow_start_jst.date()
+    
     for event in events:
       start = event["start"].get("dateTime", event["start"].get("date"))
       summary = event.get("summary", "タイトルなし")
-      tomorrow_events.append({
-        "start": start,
-        "summary": summary
-      })
-      print(f"{start} - {summary}")
+      
+      # イベントの日付を解析（日本時間基準）
+      event_date_jst = None
+      if event["start"].get("dateTime"):
+        # 時刻付きイベント
+        event_datetime_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
+        event_datetime_jst = event_datetime_utc.astimezone(jst)
+        event_date_jst = event_datetime_jst.date()
+      elif event["start"].get("date"):
+        # 終日イベント
+        event_date_jst = datetime.datetime.fromisoformat(start).date()
+      
+      # 翌日の日付（日本時間）と一致する場合のみ追加
+      if event_date_jst == tomorrow_date_jst:
+        tomorrow_events.append({
+          "start": start,
+          "summary": summary
+        })
+        print(f"翌日の予定: {start} - {summary}")
+      else:
+        print(f"除外: {start} - {summary} (日付: {event_date_jst}, 対象日: {tomorrow_date_jst})")
 
+    print(f"翌日の予定件数: {len(tomorrow_events)}件")
     return tomorrow_events
 
   except HttpError as error:
