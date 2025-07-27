@@ -1,8 +1,9 @@
+# .github/workflows/daily-notification.yml
 name: Daily Calendar Notification
 
 on:
   schedule:
-    # 毎日夜9:00 JST (12:00 UTC) に実行
+    # 毎日21時（日本時間）= UTC 12時に実行
     - cron: '0 12 * * *'
   workflow_dispatch:  # 手動実行も可能
 
@@ -24,16 +25,23 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Create credentials.json
+    - name: Debug secrets
+      env:
+        DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        NOTIFY_CHANNEL_ID: ${{ secrets.NOTIFY_CHANNEL_ID }}
+        GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
       run: |
-        echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
-    
-    - name: Create token.json
-      run: |
-        echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
+        echo "DISCORD_TOKEN exists: ${{ secrets.DISCORD_TOKEN != '' }}"
+        echo "NOTIFY_CHANNEL_ID exists: ${{ secrets.NOTIFY_CHANNEL_ID != '' }}"
+        echo "GOOGLE_SERVICE_ACCOUNT_KEY exists: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY != '' }}"
+        if [ ! -z "$GOOGLE_SERVICE_ACCOUNT_KEY" ]; then
+          echo "GOOGLE_SERVICE_ACCOUNT_KEY length: ${#GOOGLE_SERVICE_ACCOUNT_KEY}"
+        fi
     
     - name: Run notification script
       env:
         DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         NOTIFY_CHANNEL_ID: ${{ secrets.NOTIFY_CHANNEL_ID }}
-      run: python notification_script.py
+        GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+      run: |
+        python notification_script.py
