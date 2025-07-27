@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 
 async def send_notification():
-    """GitHub Actions用の通知スクリプト（デバッグ強化版）"""
+    """GitHub Actions用の通知スクリプト（エラーハンドリング強化版）"""
     print("=== 通知スクリプト開始 ===")
     
     # 環境変数から設定を取得
@@ -12,7 +12,6 @@ async def send_notification():
     NOTIFY_CHANNEL_ID_STR = os.getenv('NOTIFY_CHANNEL_ID')
     
     print(f"DISCORD_TOKEN存在: {bool(DISCORD_TOKEN)}")
-    print(f"DISCORD_TOKEN長さ: {len(DISCORD_TOKEN) if DISCORD_TOKEN else 0}")
     print(f"NOTIFY_CHANNEL_ID_STR: {NOTIFY_CHANNEL_ID_STR}")
     
     if not DISCORD_TOKEN or not NOTIFY_CHANNEL_ID_STR:
@@ -27,15 +26,21 @@ async def send_notification():
         return
     
     # 現在の日本時間を取得
-    import pytz
-    jst = pytz.timezone('Asia/Tokyo')
-    current_time = datetime.now(jst)
-    current_hour = current_time.hour
+    try:
+        import pytz
+        jst = pytz.timezone('Asia/Tokyo')
+        current_time = datetime.now(jst)
+    except ImportError:
+        # pytzがない場合はUTC+9として計算
+        from datetime import timedelta
+        current_time = datetime.utcnow() + timedelta(hours=9)
     
     print(f"現在時刻: {current_time.strftime('%Y-%m-%d %H:%M:%S')} JST")
-    print(f"現在の時間: {current_hour}時")
     
-    # Google Calendar の予定を先に取得してテスト
+    # Google Calendar の予定を取得（エラー時は空リスト）
+    tomorrow_events = []
+    calendar_status = "❌ 利用不可"
+    
     print("📅 Google Calendar 接続テスト開始...")
     try:
         from google_calendar import get_tomorrow_events
@@ -43,6 +48,7 @@ async def send_notification():
         
         tomorrow_events = get_tomorrow_events()
         print(f"✅ 予定取得成功: {len(tomorrow_events) if tomorrow_events else 0}件")
+        calendar_status = "✅ 正常"
         
         if tomorrow_events:
             print("📋 取得した予定:")
@@ -52,11 +58,12 @@ async def send_notification():
             print("📭 明日の予定はありません")
             
     except Exception as e:
-        print(f"❌ Google Calendar エラー: {str(e)}")
-        import traceback
-        print(f"詳細エラー:\n{traceback.format_exc()}")
-        # Google Calendar エラーでも Discord テストは続行
-        tomorrow_events = []
+        print(f"⚠️ Google Calendar エラー: {str(e)}")
+        if "invalid_grant" in str(e) or "expired" in str(e):
+            calendar_status = "🔄 トークン更新が必要"
+        else:
+            calendar_status = "❌ 接続エラー"
+        # エラーでもDiscord通知は続行
     
     # Discord クライアントを設定
     print("🔧 Discord クライアント設定中...")
@@ -67,14 +74,6 @@ async def send_notification():
     @client.event
     async def on_ready():
         print(f"✅ Discordにログインしました: {client.user}")
-        print(f"✅ サーバー数: {len(client.guilds)}")
-        
-        # 利用可能なサーバーとチャンネルを表示
-        for guild in client.guilds:
-            print(f"📄 サーバー: {guild.name} (ID: {guild.id})")
-            for channel in guild.channels:
-                if hasattr(channel, 'send'):  # テキストチャンネルのみ
-                    print(f"  - {channel.name} (ID: {channel.id})")
         
         try:
             # チャンネルを取得
@@ -82,64 +81,63 @@ async def send_notification():
             channel = client.get_channel(NOTIFY_CHANNEL_ID)
             
             if not channel:
-                print(f"❌ チャンネルが見つかりません (ID: {NOTIFY_CHANNEL_ID})")
-                # fetch_channel でもう一度試す
-                try:
-                    channel = await client.fetch_channel(NOTIFY_CHANNEL_ID)
-                    print(f"✅ fetch_channel で取得成功: {channel.name}")
-                except Exception as fetch_error:
-                    print(f"❌ fetch_channel でも失敗: {fetch_error}")
-                    return
-            else:
-                print(f"✅ チャンネル見つかりました: {channel.name} (ID: {channel.id})")
+                channel = await client.fetch_channel(NOTIFY_CHANNEL_ID)
             
-            # テスト用の簡単なメッセージを送信
-            print("📨 テストメッセージ送信中...")
-            test_message = f"🧪 テスト通知 - {current_time.strftime('%Y-%m-%d %H:%M:%S')} JST"
-            await channel.send(test_message)
-            print("✅ テストメッセージ送信成功")
+            print(f"✅ チャンネル見つかりました: {channel.name}")
             
-            # 実際の予定通知
+            # 通知メッセージを作成
             if tomorrow_events:
-                print("📨 予定通知メッセージ作成中...")
-                # メッセージを作成
+                # 予定がある場合
                 messages = []
                 for event in tomorrow_events:
-                    messages.append(f"明日は{event['summary']}の予定があります")
+                    messages.append(f"明日は **{event['summary']}** の予定があります")
                 
-                # 通知を送信
-                notification_text = "**明日の予定**\n" + "\n".join(messages)
-                print(f"送信メッセージ:\n{notification_text}")
+                notification_text = f"""📅 **明日の予定**
+
+{chr(10).join(messages)}
+
+🕘 **通知時刻**: {current_time.strftime('%Y年%m月%d日 %H:%M')}"""
                 
                 await channel.send(notification_text)
                 print(f"✅ 予定通知を送信しました: {len(tomorrow_events)}件の予定")
+                
             else:
-                print("📭 翌日の予定はないため通知をスキップします")
+                # 予定がない場合（Google Calendarが正常な場合のみ通知）
+                if calendar_status == "✅ 正常":
+                    notification_text = f"""📅 **明日の予定**
+
+明日の予定はありません。
+
+🕘 **通知時刻**: {current_time.strftime('%Y年%m月%d日 %H:%M')}"""
+                    
+                    await channel.send(notification_text)
+                    print("✅ 予定なし通知を送信しました")
+                else:
+                    # Google Calendarエラー時のステータス通知
+                    status_message = f"""🤖 **システム状況**
+
+📅 Google Calendar: {calendar_status}
+💬 Discord通知: ✅ 正常稼働
+
+🕘 **確認時刻**: {current_time.strftime('%Y年%m月%d日 %H:%M')}
+
+💡 Google Calendarのトークン更新が必要な場合があります。"""
+                    
+                    await channel.send(status_message)
+                    print("✅ システム状況通知を送信しました")
                 
         except Exception as e:
             print(f"❌ Discord処理エラー: {str(e)}")
-            import traceback
-            print(f"詳細エラー:\n{traceback.format_exc()}")
         finally:
             print("🔚 Discord接続を終了します")
             await client.close()
-    
-    @client.event
-    async def on_error(event, *args, **kwargs):
-        print(f"❌ Discord イベントエラー: {event}")
-        import traceback
-        traceback.print_exc()
     
     # Discord ボットを起動
     print("🚀 Discord ボット起動中...")
     try:
         await client.start(DISCORD_TOKEN)
-    except discord.LoginFailure:
-        print("❌ Discord ログイン失敗: トークンが無効です")
     except Exception as e:
         print(f"❌ Discord起動エラー: {str(e)}")
-        import traceback
-        print(f"詳細エラー:\n{traceback.format_exc()}")
 
 if __name__ == "__main__":
     print("🏁 メイン実行開始")
