@@ -1,69 +1,73 @@
 import asyncio
 import discord
 import os
-from datetime import datetime
+import datetime
+import pytz
 
 async def send_notification():
-    """GitHub Actions用の通知スクリプト（エラーハンドリング強化版）"""
-    print("=== 通知スクリプト開始 ===")
+    """ハイブリッドシステムによる予定通知"""
     
-    # 環境変数から設定を取得
+    print("🏁 メイン実行開始")
+    print("=== ハイブリッド通知スクリプト開始 ===")
+    
+    # 環境変数の確認
     DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
     NOTIFY_CHANNEL_ID_STR = os.getenv('NOTIFY_CHANNEL_ID')
     
-    print(f"DISCORD_TOKEN存在: {bool(DISCORD_TOKEN)}")
-    print(f"NOTIFY_CHANNEL_ID_STR: {NOTIFY_CHANNEL_ID_STR}")
+    print(f"DISCORD_TOKEN存在: {DISCORD_TOKEN is not None}")
+    print(f"NOTIFY_CHANNEL_ID_STR: {'***' if NOTIFY_CHANNEL_ID_STR else 'None'}")
     
     if not DISCORD_TOKEN or not NOTIFY_CHANNEL_ID_STR:
-        print("❌ 環境変数が設定されていません")
+        print("❌ 必要な環境変数が設定されていません")
         return
     
     try:
         NOTIFY_CHANNEL_ID = int(NOTIFY_CHANNEL_ID_STR)
-        print(f"NOTIFY_CHANNEL_ID: {NOTIFY_CHANNEL_ID}")
-    except ValueError as e:
-        print(f"❌ NOTIFY_CHANNEL_IDが無効な数値です: {e}")
+        print(f"NOTIFY_CHANNEL_ID: {'***' if NOTIFY_CHANNEL_ID else 'None'}")
+    except ValueError:
+        print("❌ NOTIFY_CHANNEL_ID が無効な数値です")
         return
     
-    # 現在の日本時間を取得
-    try:
-        import pytz
-        jst = pytz.timezone('Asia/Tokyo')
-        current_time = datetime.now(jst)
-    except ImportError:
-        # pytzがない場合はUTC+9として計算
-        from datetime import timedelta
-        current_time = datetime.utcnow() + timedelta(hours=9)
-    
+    # 現在時刻表示
+    jst = pytz.timezone('Asia/Tokyo')
+    current_time = datetime.datetime.now(jst)
     print(f"現在時刻: {current_time.strftime('%Y-%m-%d %H:%M:%S')} JST")
     
-    # Google Calendar の予定を取得（エラー時は空リスト）
+    # ハイブリッドシステムで予定取得
     tomorrow_events = []
-    calendar_status = "❌ 利用不可"
+    calendar_status = "✅ 接続成功"
     
-    print("📅 Google Calendar 接続テスト開始...")
     try:
-        from google_calendar import get_tomorrow_events
-        print("✅ google_calendar モジュールのインポート成功")
+        print("📅 ハイブリッドシステム開始...")
         
-        tomorrow_events = get_tomorrow_events()
-        print(f"✅ 予定取得成功: {len(tomorrow_events) if tomorrow_events else 0}件")
-        calendar_status = "✅ 正常"
+        # google_calendar モジュールをインポート
+        try:
+            import google_calendar
+            print("✅ google_calendar モジュールのインポート成功")
+        except ImportError as e:
+            print(f"❌ google_calendar モジュールのインポートエラー: {e}")
+            # フォールバック: 固定スケジュールのみ
+            tomorrow_events = get_fallback_schedule()
+            calendar_status = "⚠️ 固定スケジュールのみ"
+        else:
+            # ハイブリッドシステムで予定取得
+            tomorrow_events = google_calendar.get_tomorrow_events()
+            calendar_status = "✅ ハイブリッドシステム"
         
         if tomorrow_events:
             print("📋 取得した予定:")
             for i, event in enumerate(tomorrow_events):
-                print(f"  {i+1}. {event.get('summary', '名前なし')}")
+                source = event.get('source', 'unknown')
+                source_icon = {'google_calendar': '📱', 'fixed_schedule': '📅'}
+                print(f"  {i+1}. {source_icon.get(source, '❓')} {event.get('summary', '名前なし')}")
         else:
             print("📭 明日の予定はありません")
             
     except Exception as e:
-        print(f"⚠️ Google Calendar エラー: {str(e)}")
-        if "invalid_grant" in str(e) or "expired" in str(e):
-            calendar_status = "🔄 トークン更新が必要"
-        else:
-            calendar_status = "❌ 接続エラー"
-        # エラーでもDiscord通知は続行
+        print(f"⚠️ ハイブリッドシステム エラー: {str(e)}")
+        # 完全フォールバック
+        tomorrow_events = get_fallback_schedule()
+        calendar_status = "⚠️ フォールバック動作"
     
     # Discord クライアントを設定
     print("🔧 Discord クライアント設定中...")
@@ -81,50 +85,58 @@ async def send_notification():
             channel = client.get_channel(NOTIFY_CHANNEL_ID)
             
             if not channel:
+                print("⚠️ get_channel で見つからないため fetch_channel を試行...")
                 channel = await client.fetch_channel(NOTIFY_CHANNEL_ID)
             
             print(f"✅ チャンネル見つかりました: {channel.name}")
             
             # 通知メッセージを作成
             if tomorrow_events:
-                # 予定がある場合
-                messages = []
-                for event in tomorrow_events:
-                    messages.append(f"明日は **{event['summary']}** の予定があります")
+                # 予定ありの場合
+                event_messages = []
+                google_count = 0
+                fixed_count = 0
                 
-                notification_text = f"""📅 **明日の予定**
+                for event in tomorrow_events:
+                    source = event.get('source', 'unknown')
+                    if source == 'google_calendar':
+                        google_count += 1
+                        event_messages.append(f"📱 **{event['summary']}**")
+                    elif source == 'fixed_schedule':
+                        fixed_count += 1
+                        event_messages.append(f"📅 **{event['summary']}**")
+                    else:
+                        event_messages.append(f"❓ **{event['summary']}**")
+                
+                # システム情報
+                system_info = []
+                if google_count > 0:
+                    system_info.append(f"📱 Google Calendar: {google_count}件")
+                if fixed_count > 0:
+                    system_info.append(f"📅 固定スケジュール: {fixed_count}件")
+                
+                notification_text = f"""📅 **明日の予定** ({len(tomorrow_events)}件)
 
-{chr(10).join(messages)}
+{chr(10).join(event_messages)}
 
+🔄 **システム状況**: {calendar_status}
+📊 **内訳**: {' / '.join(system_info)}
 🕘 **通知時刻**: {current_time.strftime('%Y年%m月%d日 %H:%M')}"""
                 
                 await channel.send(notification_text)
-                print(f"✅ 予定通知を送信しました: {len(tomorrow_events)}件の予定")
+                print(f"✅ 予定通知を送信しました: {len(tomorrow_events)}件")
                 
             else:
-                # 予定がない場合（Google Calendarが正常な場合のみ通知）
-                if calendar_status == "✅ 正常":
-                    notification_text = f"""📅 **明日の予定**
+                # 予定なしの場合
+                notification_text = f"""📅 **明日の予定**
 
 明日の予定はありません。
 
+🔄 **システム状況**: {calendar_status}
 🕘 **通知時刻**: {current_time.strftime('%Y年%m月%d日 %H:%M')}"""
-                    
-                    await channel.send(notification_text)
-                    print("✅ 予定なし通知を送信しました")
-                else:
-                    # Google Calendarエラー時のステータス通知
-                    status_message = f"""🤖 **システム状況**
-
-📅 Google Calendar: {calendar_status}
-💬 Discord通知: ✅ 正常稼働
-
-🕘 **確認時刻**: {current_time.strftime('%Y年%m月%d日 %H:%M')}
-
-💡 Google Calendarのトークン更新が必要な場合があります。"""
-                    
-                    await channel.send(status_message)
-                    print("✅ システム状況通知を送信しました")
+                
+                await channel.send(notification_text)
+                print("✅ 予定なし通知を送信しました")
                 
         except Exception as e:
             print(f"❌ Discord処理エラー: {str(e)}")
@@ -139,7 +151,35 @@ async def send_notification():
     except Exception as e:
         print(f"❌ Discord起動エラー: {str(e)}")
 
+def get_fallback_schedule():
+    """完全フォールバック: 最小限の固定スケジュール"""
+    try:
+        jst = pytz.timezone('Asia/Tokyo')
+        tomorrow = datetime.datetime.now(jst).date() + datetime.timedelta(days=1)
+        weekday = tomorrow.weekday()
+        
+        # 最小限のごみ出しスケジュール
+        basic_schedule = {
+            0: ['家庭ごみ'],  # 月曜日
+            1: ['プラごみ'],       # 火曜日
+            2: ['瓶、缶、ペットごみ'],                     # 水曜日
+            3: ['燃えるごみ']                        # 金曜日
+        }
+        
+        events = []
+        if weekday in basic_schedule:
+            for task in basic_schedule[weekday]:
+                events.append({
+                    'summary': task,
+                    'start': {'date': tomorrow.strftime('%Y-%m-%d')},
+                    'source': 'fallback'
+                })
+        
+        return events
+        
+    except Exception:
+        return []
+
 if __name__ == "__main__":
-    print("🏁 メイン実行開始")
     asyncio.run(send_notification())
     print("🏁 メイン実行終了")
