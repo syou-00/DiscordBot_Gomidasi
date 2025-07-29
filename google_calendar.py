@@ -57,7 +57,7 @@ def get_google_calendar_events():
             calendar_name = calendar.get('summary', 'Unknown')
             access_role = calendar.get('accessRole', 'Unknown')
             
-            if access_role not in ['reader', 'writer', 'owner']:
+            if access_role not in ['reader', 'writer', 'writer', 'owner']:
                 continue
             
             try:
@@ -103,6 +103,13 @@ def get_google_calendar_events():
         print(f"❌ Google Calendar エラー: {error}")
         return []
 
+def get_week_of_month(date):
+    """月の第何週目かを取得（1=第1週, 2=第2週, 3=第3週, 4=第4週, 5=第5週）"""
+    first_day_of_month = date.replace(day=1)
+    # その月の最初の日から数えて何週目か
+    week_number = (date.day - 1) // 7 + 1
+    return week_number
+
 def get_fixed_schedule_events():
     """固定スケジュールから明日の予定を取得"""
     try:
@@ -112,46 +119,62 @@ def get_fixed_schedule_events():
         tomorrow = datetime.datetime.now(jst).date() + datetime.timedelta(days=1)
         weekday = tomorrow.weekday()  # 0=月曜日, 6=日曜日
         tomorrow_str = tomorrow.strftime('%Y-%m-%d')
+        week_of_month = get_week_of_month(tomorrow)
         
         weekday_names = ['月', '火', '水', '木', '金', '土', '日']
-        print(f"明日: {tomorrow_str} ({weekday_names[weekday]}曜日)")
-        
-        # 曜日別の基本スケジュール（地域に応じて調整）
-        weekly_schedule = {
-            0: ['家庭ごみ'],  # 月曜日
-            1: ['プラごみ'],                              # 火曜日
-            2: ['瓶、缶、ペットごみ'],                     # 水曜日
-            3: ['燃えるごみ'],                              # 木曜日
-            4: [],                       # 金曜日
-            5: [],                              # 土曜日
-            6: []                               # 日曜日
-        }
-        
-
+        print(f"明日: {tomorrow_str} ({weekday_names[weekday]}曜日) - 第{week_of_month}週")
         
         events = []
         
-        # 曜日ベースの予定
-        if weekday in weekly_schedule:
-            for task in weekly_schedule[weekday]:
+        # 曜日別の基本スケジュール
+        if weekday == 0:  # 月曜日
+            events.append({
+                'summary': '燃えるごみ',
+                'start': {'date': tomorrow_str},
+                'source': 'fixed_schedule',
+                'type': 'weekly'
+            })
+            print(f"📅 定期予定: 燃えるごみ")
+            
+        elif weekday == 1:  # 火曜日
+            events.append({
+                'summary': 'プラスチックごみ',
+                'start': {'date': tomorrow_str},
+                'source': 'fixed_schedule',
+                'type': 'weekly'
+            })
+            print(f"📅 定期予定: プラスチックごみ")
+            
+        elif weekday == 2:  # 水曜日
+            # 瓶・缶・ペットボトルは毎週
+            events.append({
+                'summary': '瓶・缶・ペットボトルごみ',
+                'start': {'date': tomorrow_str},
+                'source': 'fixed_schedule',
+                'type': 'weekly'
+            })
+            print(f"📅 定期予定: 瓶・缶・ペットボトルごみ")
+            
+            # 紙ごみは2週目と4週目のみ
+            if week_of_month in [2, 4]:
                 events.append({
-                    'summary': task,
+                    'summary': '紙ごみ',
                     'start': {'date': tomorrow_str},
                     'source': 'fixed_schedule',
-                    'type': 'weekly'
+                    'type': 'biweekly'
                 })
-                print(f"📅 定期予定: {task}")
+                print(f"📅 定期予定: 紙ごみ (第{week_of_month}週)")
+                
+        elif weekday == 3:  # 木曜日
+            events.append({
+                'summary': '燃えるごみ',
+                'start': {'date': tomorrow_str},
+                'source': 'fixed_schedule',
+                'type': 'weekly'
+            })
+            print(f"📅 定期予定: 燃えるごみ")
         
-        # 特定日付の予定
-        if tomorrow_str in special_dates:
-            for task in special_dates[tomorrow_str]:
-                events.append({
-                    'summary': task,
-                    'start': {'date': tomorrow_str},
-                    'source': 'fixed_schedule',
-                    'type': 'special'
-                })
-                print(f"📅 特別予定: {task}")
+        # 金曜・土曜・日曜は予定なし
         
         print(f"固定スケジュールから取得: {len(events)}件")
         return events
@@ -184,9 +207,10 @@ def get_tomorrow_events():
         is_duplicate = False
         for google_event in google_events:
             google_summary = google_event['summary'].lower()
-            # 部分一致で重複判定（例: "ごみ"が含まれているかどうか）
-            if any(keyword in google_summary for keyword in ['ごみ', 'ゴミ', 'プラスチック', '紙']) and \
-               any(keyword in fixed_summary for keyword in ['ごみ', 'ゴミ', 'プラスチック', '紙']):
+            # 部分一致で重複判定
+            garbage_keywords = ['ごみ', 'ゴミ', 'プラスチック', '紙', '瓶', '缶', 'ペット', '燃える']
+            if any(keyword in google_summary for keyword in garbage_keywords) and \
+               any(keyword in fixed_summary for keyword in garbage_keywords):
                 is_duplicate = True
                 print(f"🔄 重複スキップ: {fixed_event['summary']} (Google予定と重複)")
                 break
