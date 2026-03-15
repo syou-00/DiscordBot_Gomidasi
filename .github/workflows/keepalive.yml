@@ -1,0 +1,26 @@
+name: keepalive
+
+on:
+  schedule:
+    - cron: "0 0 */7 * *"
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update keepalive file
+        run: |
+          date > keepalive.txt
+
+      - name: Commit and push
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add keepalive.txt
+          git commit -m "keepalive update" || echo "No changes to commit"
+          git push
